@@ -1,8 +1,8 @@
 import pickle
 from analiseSentimentos import clean, is_special, to_lower, rem_stopwords,stem_txt
 # Carrega o vocabulário e o modelo treinado
-cv = pickle.load(open('cv.pk1', 'rb'))
-bnb = pickle.load(open('model0.pk1', 'rb'))
+cv = pickle.load(open('cvBr.pk1', 'rb'))
+bnb = pickle.load(open('modelBr.pk1', 'rb'))
 
 
 def prever_sentimento(texto, cv, modelo):
@@ -20,12 +20,9 @@ def prever_sentimento(texto, cv, modelo):
 #fazendo o teste
 
 rev = """
-The show is set in a future where giant spaceships are manufactured and sent out beyond the Earth into deep space and there is no mechanism to detect when one of those ships is hurtling back towards Earth? No defence mechanism? At least in the Expanse the rock hurtling people had to figure out a way to disable the defences. Lazy and contrived.
-
-And not sure if that's worse or better than the ship crash lands on Earth and they send children in synthetic bodies with no hazmat team? No attempt to contain or quarantine before. Just go right in there and start exploring guys no need to worry about what might be in there!!
-
-Pahleez.
+filme ruim, eu estou muito triste em ver que meu filme favorito da minha infancia se tornou algo tão banal, complicado! 
 
 """
 y_pred = prever_sentimento(rev, cv, bnb )
 print("predict teste: ", y_pred)
+print(cv.get_feature_names_out()[:50])  # Mostra as primeiras 50 palavras
