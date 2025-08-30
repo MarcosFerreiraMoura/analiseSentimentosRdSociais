@@ -1,0 +1,10 @@
+# Ignorar arquivos grandes
+data/imdb-reviews-pt-br.csv
+
+# Ignorar pastas de dados geradas pelo app
+dadosPesquisa/
+dadosAnalisados/
+
+# Ignorar arquivos temporários do Python
+*.pyc
+__pycache__/
