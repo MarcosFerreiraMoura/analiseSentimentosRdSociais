@@ -31,6 +31,7 @@ import google.generativeai as genai
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+from tkinter import filedialog
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -49,8 +50,8 @@ REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 SUBREDDIT = "all"
-POST_LIMIT = 20
-COMMENT_LIMIT = 10
+POST_LIMIT = 8
+COMMENT_LIMIT = 5
 
 GEN_MODEL_NAME = "gemini-1.5-flash"
 GEN_TEMPERATURE = 0.1
@@ -126,6 +127,20 @@ def collect_reddit_texts(keyword: str, cfg: Config) -> list[dict]:
     return [r for r in results if r["texto"]]
 
 
+def load_manual_texts(filename: str) -> list[dict]:
+    """
+    Lê um CSV já existente com a coluna 'comentario/review'
+    e converte para o mesmo formato usado no pipeline normal.
+    """
+    import csv
+    results = []
+    with open(filename, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter=";")
+        for row in reader:
+            texto = clean_text(row.get("comentario/review", ""))
+            if texto:
+                results.append({"origem": "manual", "texto": texto})
+    return results
 
 
 
@@ -247,6 +262,9 @@ class App:
         self.entry = tk.Entry(top, width=40); self.entry.pack(side=tk.LEFT, padx=6)
         self.search_button = tk.Button(top, text="Pesquisar", command=self.on_search); self.search_button.pack(side=tk.LEFT)
 
+        self.file_button = tk.Button(top, text="Adicionar Arquivos", command=self.on_add_file)
+        self.file_button.pack(side=tk.LEFT, padx=6)
+
         filt = tk.Frame(master); filt.pack(pady=5)
         self.filtro_var = tk.StringVar(value="Todos")
         ttk.Combobox(
@@ -297,6 +315,29 @@ class App:
         self.fill_table(self.df_total)
         
         threading.Thread(target=self._run_pipeline, args=(kw,), daemon=True).start()
+
+    def on_add_file(self):
+        filename = filedialog.askopenfilename(
+            title="Selecione um arquivo",
+            filetypes=[("CSV Files", "*.csv"), ("Todos os arquivos", "*.*")]
+        )
+        if not filename:
+            return  # usuário cancelou
+
+        self.search_button.config(state="disabled")
+        self.file_button.config(state="disabled")
+        self.set_status(f"Lendo arquivo: {filename}")
+
+        # limpa resultados anteriores
+        self.df_total = pd.DataFrame()
+        self.update_chart()
+        self.fill_table(self.df_total)
+
+        # processa em thread separada
+        threading.Thread(target=self._run_pipeline_file, args=(filename,), daemon=True).start()
+
+
+
 
     # CORREÇÃO: Este método agora roda em uma thread separada e se comunica via fila
     def _run_pipeline(self, kw: str):
@@ -358,6 +399,8 @@ class App:
             elif msg_type == "done":
                 self.set_status("Concluído.")
                 self.search_button.config(state="normal") # Reabilitar o botão
+                self.file_button.config(state="normal")
+
         
         except queue.Empty:
             pass # Fila vazia, não faz nada
@@ -365,17 +408,40 @@ class App:
             self.master.after(100, self.process_queue) # Reagendar a verificação
 
     def update_chart(self):
-        self.ax.clear() # MELHORIA: Limpar apenas os eixos, não a figura inteira
-        if not self.df_total.empty:
-            counts = self.df_total["sent_gemini"].value_counts()
-            colors = {'positivo': 'green', 'negativo': 'red', 'neutro': 'gray', 'nao_classificado': 'orange'}
-            bar_colors = [colors.get(label, 'blue') for label in counts.index]
-            self.ax.bar(counts.index, counts.values, color=bar_colors)
+        self.ax.clear()
         
-        self.ax.set_title("Distribuição de Sentimentos (Gemini)")
-        self.ax.set_ylabel("Quantidade")
-        self.fig.tight_layout()
+        if not self.df_total.empty:
+            # --- Gemini ---
+            counts_gemini = self.df_total["sent_gemini"].value_counts()
+            colors_g = {'positivo': 'green', 'negativo': 'red', 'neutro': 'gray', 'nao_classificado': 'orange'}
+            bar_colors_g = [colors_g.get(label, 'blue') for label in counts_gemini.index]
+            
+            # --- VADER ---
+            if ENABLE_VADER_COLUMN and "sent_vader" in self.df_total.columns:
+                counts_vader = self.df_total["sent_vader"].value_counts()
+                colors_v = {'positivo': 'green', 'negativo': 'red', 'neutro': 'gray', 'nao_classificado': 'orange'}
+                bar_colors_v = [colors_v.get(label, 'blue') for label in counts_vader.index]
+            else:
+                counts_vader, bar_colors_v = pd.Series(), []
+
+            # --- Subplots lado a lado ---
+            self.fig.clf()
+            ax1 = self.fig.add_subplot(1,2,1)
+            ax2 = self.fig.add_subplot(1,2,2)
+
+            ax1.bar(counts_gemini.index, counts_gemini.values, color=bar_colors_g)
+            ax1.set_title("Distribuição Gemini")
+            ax1.set_ylabel("Quantidade")
+
+            if not counts_vader.empty:
+                ax2.bar(counts_vader.index, counts_vader.values, color=bar_colors_v)
+                ax2.set_title("Distribuição VADER")
+                ax2.set_ylabel("Quantidade")
+
+            self.fig.tight_layout()
+
         self.canvas.draw()
+
 
     def fill_table(self, df: pd.DataFrame):
         for row in self.tree.get_children():
@@ -401,6 +467,47 @@ class App:
             else:
                 self.fill_table(pd.DataFrame())
 
+    def _run_pipeline_file(self, filename: str):
+        try:
+            self.thread_queue.put(("status", "Carregando comentários do arquivo…"))
+            texts = load_manual_texts(filename)
+
+            if not texts:
+                self.thread_queue.put(("message", ("info", "Nenhum texto encontrado no arquivo.")))
+                self.thread_queue.put(("done", None))
+                return
+        except Exception as e:
+            self.thread_queue.put(("message", ("error", f"Erro ao ler o arquivo:\n{e}")))
+            self.thread_queue.put(("done", None))
+            return
+
+        try:
+            if self.model is None:
+                self.thread_queue.put(("status", "Inicializando modelo Gemini…"))
+                self.model = make_gemini_model()
+        except Exception as e:
+            self.thread_queue.put(("message", ("error", f"Erro ao inicializar o Gemini:\n{e}")))
+            self.thread_queue.put(("done", None))
+            return
+
+        rows = []
+        for i, item in enumerate(texts, start=1):
+            txt = item["texto"]
+            self.thread_queue.put(("status", f"Classificando com Gemini… {i}/{len(texts)}"))
+            g_label = classify_with_gemini(self.model, txt)
+            v_label = classify_with_vader(txt) if ENABLE_VADER_COLUMN else None
+            row_data = {"origem": item["origem"], "texto": txt, "sent_gemini": g_label}
+            if ENABLE_VADER_COLUMN:
+                row_data["sent_vader"] = v_label
+            rows.append(row_data)
+            time.sleep(GEN_SLEEP_BETWEEN_CALLS)
+
+        df_results = pd.DataFrame(rows)
+        save_results(df_results, filename=os.path.basename(filename).replace(".csv", "_results.csv"))
+        self.thread_queue.put(("results", df_results))
+        self.thread_queue.put(("done", None))
+
+
 def main():
     root = tk.Tk()
     app = App(root)
@@ -408,4 +515,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # CORREÇÃO: Remover a chamada plt.show() redundante
+    

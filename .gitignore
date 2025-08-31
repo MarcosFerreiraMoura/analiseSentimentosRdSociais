@@ -4,7 +4,9 @@ data/imdb-reviews-pt-br.csv
 # Ignorar pastas de dados geradas pelo app
 dadosPesquisa/
 dadosAnalisados/
-
+comentarios_sus_classificados_final.csv/
+comentarios_equatorial.csv/
+comentarios_classificadosGPT.csv/
 # Ignorar arquivos temporários do Python
 *.pyc
 __pycache__/
